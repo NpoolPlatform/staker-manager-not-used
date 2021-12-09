@@ -17,9 +17,9 @@ if ! command -v gofumpt; then
     go install mvdan.cc/gofumpt@latest
 fi
 
+PATH=$PATH:bin
 if ! command -v golangci-lint; then
     curl -sfL $URL | sh -s $VERSION
-    PATH=$PATH:bin
 fi
 
 golangci-lint version
