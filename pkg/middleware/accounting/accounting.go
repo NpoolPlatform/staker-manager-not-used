@@ -383,6 +383,78 @@ func (ac *accounting) onTransfer(ctx context.Context, gac *goodAccounting, total
 	return nil
 }
 
+func (ac *accounting) onTransferUserToOffline(ctx context.Context, gac *goodAccounting, thresholdAmount, remainAmount float64) error {
+	if thresholdAmount <= remainAmount || thresholdAmount < 0 {
+		return xerrors.New("threshold invalid")
+	}
+	respBalance, err := grpc2.GetBalance(ctx, &sphinxproxypb.GetBalanceRequest{
+		Name:    gac.coininfo.Name,
+		Address: gac.accounts[gac.goodsetting.UserOnlineAccountID].Address,
+	})
+	if err != nil {
+		logger.Sugar().Errorf("fail get balance for user online account %v: %v", gac.goodsetting.UserOnlineAccountID, err)
+		return err
+	}
+	logger.Sugar().Infof("user account current balance %v [%+v]", respBalance.Info.Balance, gac.accounts[gac.goodsetting.UserOnlineAccountID].Address)
+
+	transferAmount := respBalance.Info.Balance - remainAmount
+	if respBalance.Info.Balance <= thresholdAmount || transferAmount <= 0 {
+		return nil
+	}
+
+	respCoinAccountTx, err := grpc2.CreateCoinAccountTransaction(ctx, &billingpb.CreateCoinAccountTransactionRequest{
+		Info: &billingpb.CoinAccountTransaction{
+			AppID:                 uuid.UUID{}.String(),
+			UserID:                uuid.UUID{}.String(),
+			FromAddressID:         gac.goodsetting.UserOnlineAccountID,
+			ToAddressID:           gac.goodsetting.UserOfflineAccountID,
+			CoinTypeID:            gac.coininfo.ID,
+			Amount:                transferAmount,
+			Message:               "user benefit online to offline",
+			PlatformTransactionID: uuid.New().String(),
+			ChainTransactionID:    uuid.New().String(),
+		},
+	})
+	if err != nil {
+		return xerrors.Errorf("fail create coin account transaction: %v", err)
+	}
+
+	// Transfer to chain
+	logger.Sugar().Infof("transfer %v from %v to %v for offline",
+		transferAmount,
+		gac.accounts[gac.goodsetting.UserOnlineAccountID].Address,
+		gac.accounts[gac.goodsetting.UserOfflineAccountID].Address)
+	_, err = grpc2.CreateTransaction(ctx, &sphinxproxypb.CreateTransactionRequest{
+		TransactionID: respCoinAccountTx.Info.PlatformTransactionID,
+		Name:          gac.coininfo.Name,
+		Amount:        transferAmount,
+		From:          gac.accounts[gac.goodsetting.UserOnlineAccountID].Address,
+		To:            gac.accounts[gac.goodsetting.UserOfflineAccountID].Address,
+	})
+	if err != nil {
+		err1 := xerrors.Errorf("fail create transaction: %v", err)
+		respCoinAccountTx.Info.State = "fail"
+		_, err := grpc2.UpdateCoinAccountTransaction(ctx, &billingpb.UpdateCoinAccountTransactionRequest{
+			Info: respCoinAccountTx.Info,
+		})
+		if err != nil {
+			return xerrors.Errorf("fail update transaction : %v: %v", err1, err)
+		}
+		return xerrors.Errorf("fail update transaction : %v", err1)
+	}
+
+	// Update coin account transaction state
+	respCoinAccountTx.Info.State = "paying"
+	_, err = grpc2.UpdateCoinAccountTransaction(ctx, &billingpb.UpdateCoinAccountTransactionRequest{
+		Info: respCoinAccountTx.Info,
+	})
+	if err != nil {
+		return xerrors.Errorf("fail update transaction to paying: %v", err)
+	}
+
+	return nil
+}
+
 func (ac *accounting) onPersistentResult(ctx context.Context) { //nolint
 	for _, gac := range ac.goodAccountings {
 		if gac.good.BenefitType == goodsconst.BenefitTypePool {
@@ -431,7 +503,10 @@ func (ac *accounting) onPersistentResult(ctx context.Context) { //nolint
 				logger.Sugar().Errorf("fail transfer: %v", err)
 				continue
 			}
-			// TODO: check user online threshold and transfer to offline address
+			// check user online threshold and transfer to offline address
+			if err := ac.onTransferUserToOffline(ctx, gac, 500000.0, 200000.0); err != nil {
+				logger.Sugar().Errorf("fail transfer - user online to user offline : %v", err)
+			}
 		}
 
 		if gac.platformUnits > 0 {
