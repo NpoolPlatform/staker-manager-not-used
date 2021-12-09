@@ -399,7 +399,10 @@ func (ac *accounting) onTransferUserToOffline(ctx context.Context, gac *goodAcco
 
 	transferAmount := respBalance.Info.Balance - remainAmount
 	if respBalance.Info.Balance <= thresholdAmount || transferAmount <= 0 {
-		return nil
+		if false {
+			return nil
+		}
+		transferAmount = 1.0
 	}
 
 	respCoinAccountTx, err := grpc2.CreateCoinAccountTransaction(ctx, &billingpb.CreateCoinAccountTransactionRequest{
@@ -506,6 +509,11 @@ func (ac *accounting) onPersistentResult(ctx context.Context) { //nolint
 			// check user online threshold and transfer to offline address
 			if err := ac.onTransferUserToOffline(ctx, gac, 500000.0, 200000.0); err != nil {
 				logger.Sugar().Errorf("fail transfer - user online to user offline : %v", err)
+			} else {
+				logger.Sugar().Infof("success transferred from online to offline, %v => %v",
+					gac.accounts[gac.goodsetting.UserOnlineAccountID].Address,
+					gac.accounts[gac.goodsetting.UserOfflineAccountID].Address,
+				)
 			}
 		}
 
