@@ -16,6 +16,7 @@ import (
 
 	billingconst "github.com/NpoolPlatform/cloud-hashing-billing/pkg/const"
 	goodsconst "github.com/NpoolPlatform/cloud-hashing-goods/pkg/const"
+	orderconst "github.com/NpoolPlatform/cloud-hashing-order/pkg/const"
 
 	"github.com/NpoolPlatform/go-service-framework/pkg/logger"
 
@@ -259,8 +260,9 @@ func (ac *accounting) onQueryOrders(ctx context.Context) {
 			if err != nil {
 				logger.Sugar().Errorf("fail to get payment of order %v", info.ID)
 				continue
-			} else if respPayment.Info.State != "done" {
-				logger.Sugar().Errorf("order %v not paid %+v", info.ID, respPayment)
+			}
+			if respPayment.Info.State != orderconst.PaymentStateDone {
+				logger.Sugar().Infof("order %v not paid, payment %v", info.ID, respPayment.Info.ID)
 				continue
 			}
 
@@ -407,10 +409,7 @@ func (ac *accounting) onTransferUserToOffline(ctx context.Context, gac *goodAcco
 
 	transferAmount := respBalance.Info.Balance - remainAmount
 	if respBalance.Info.Balance <= thresholdAmount || transferAmount <= 0 {
-		if false {
-			return nil
-		}
-		transferAmount = 1.0
+		return nil
 	}
 
 	respCoinAccountTx, err := grpc2.CreateCoinAccountTransaction(ctx, &billingpb.CreateCoinAccountTransactionRequest{
